@@ -359,3 +359,64 @@ Re-examined each of the five Phase C/D categories against the specific question 
 
 - `analysis/scripts/validate.js` — self-contained independent re-derivation of all ten answers (does not import the Phase C/D `lib/` modules), writes `analysis/results/validated_answers.json`.
 - `analysis/results/validated_answers.json` — the Phase E answer set, kept alongside the untouched Phase C/D `analysis/results/answers.json` for comparison.
+
+---
+
+# Phase F — Final findings audit
+
+Re-read `statement.md` and `API_REFERENCE.md` in full once more and re-verified every candidate finding line-by-line against the actual documented text (not against memory of it), before finalizing `analysis/results/final_findings.json`.
+
+## Two quick re-verifications before finalizing scope
+
+Two Phase B/D findings had only been directly tested against `/v1/listings`; before writing the final list, checked live whether they also hold for `/v1/rentals` and `/v1/projects`, since the documentation describes the pagination convention once, generically, for "every collection endpoint":
+
+- **`page` param ignored:** confirmed live — `page=1` vs `page=2` (same `limit`) return identical results on `/v1/rentals` and `/v1/projects`, matching `/v1/listings`. Finding scope widened from `/v1/listings` to `*`.
+- **Max `limit` is 50, not 200:** confirmed live — `limit=100` is clamped to 50 on `/v1/rentals` and `/v1/projects` too. Finding scope widened to `*`.
+
+Both were one-line live spot-checks, not a re-opening of the investigation — the conclusion didn't change, only its documented scope became more accurate (broader and now fully evidenced, rather than conservatively narrow).
+
+## Final findings list: 21 confirmed discrepancies
+
+Every finding in `analysis/results/final_findings.json` was checked against three bars before inclusion:
+1. **Personally reproduced** — every finding traces to a specific request/response or a computation over the downloaded raw data, not an inference from documentation wording alone.
+2. **Evidence, where required** — every finding that makes a claim about specific records (rather than about how an endpoint behaves) carries up to 20 listing/project IDs. Programmatically verified after writing the list: every evidence ID exists in the downloaded dataset, and (checked per-finding) genuinely exhibits the claimed property — e.g. every ID cited as `is_live:false` evidence really has `is_live:false` in the raw data; every ID cited as project-count-mismatch evidence really has a mismatched count; every data_quality/fraud evidence ID is a member of the final Q4/Q9 answer sets. No evidence ID was found to be wrong on this check.
+3. **Exactly one of the 13 allowed categories** — verified programmatically against the literal list in `statement.md`; no finding uses a category outside `{auth, pagination, units, filters, sorting, timestamps, duplicates, completeness, data_quality, fraud, consistency, missing_endpoint, undocumented_endpoint}`.
+
+**Consolidation decisions** (per the instruction to remove duplicate/overlapping findings unless separating them materially improves clarity):
+- Kept 4 separate `pagination`-category findings (page ignored, max limit wrong, response shape wrong, `total` undercounts) rather than merging them, since each is independently reproducible, independently actionable for a frontend implementer, and describes a materially different mechanism — not padding.
+- Merged the "documented `/v1/favourites` path is missing" fact and the "actual `/v1/saved` endpoint uses a different body field name" fact into **one** `undocumented_endpoint` finding, since they're two symptoms of the same underlying story (the whole favourites feature lives somewhere else than documented) and a reader gains nothing from seeing them split.
+- Did **not** create a separate finding for "rentals' `posted_at` correctly follows the UTC convention while listings' doesn't" — folded into the one `timestamps` finding on listings, using the rentals comparison as part of its "how_found" reasoning rather than as its own finding, since it's the same underlying fact from a different angle.
+- Added two findings not present in earlier phases' notes but required by the assignment's own category list: `data_quality` (the Q4 corrupt listings) and `fraud` (the Q9 fake listings) are themselves explicitly-named allowed categories, so the Part 2 investigative work is also reported as Part 3 findings, each with up to 20 evidence IDs drawn from the final answer sets.
+
+**Findings considered and explicitly rejected** (kept out of the final list; recorded here so the rejection is visible, not silently dropped):
+- A separate finding for the 6 far-future (2027-dated) listings — no evidence ties them to a specific documented claim being wrong (they're an unresolved anomaly, not a proven documentation-vs-API discrepancy); reporting it as a finding would be exactly the "claim you have not personally reproduced against a specific documented behavior" the assignment warns against.
+- A separate finding for "the sub-₹30k-price listings" as a `data_quality` claim — removed from Q4 in Phase E for not meeting the impossibility bar, and for the same reason not elevated to its own Part 3 finding either; noted only as a rejected hypothesis (see README-facing summary below).
+- A separate finding for the person-only-name multi-identity contacts (135 listings) as `fraud` — same reasoning as their exclusion from Q9: a suspicious identity pattern without behavioral evidence (market-rate pricing) isn't evidence the assignment's evaluators could verify as fraud specifically, as opposed to an unusual but legitimate data artifact.
+- `is_verified` as any kind of signal — tested in Phase D/E and found to run in the *opposite* direction of the fraud hypothesis (higher, not lower, verification rate among fraud-flagged listings); not usable as evidence for anything.
+
+## Rejected hypotheses worth carrying into the README (consolidated list)
+
+These are the hypotheses that were tested and found FALSE, or found to be correct/no discrepancy — preserved here as the assignment explicitly values them:
+
+- Documented `page`/`limit` pagination scheme — **FALSE**, but only after confirming default `limit=20` with no params **is correct** (no discrepancy there).
+- `sort_by=price`, `carpet_area`, `bedroom` — **TRUE**, sort correctly; only `posted_at` is broken.
+- `locality`, `bhk`, `min_price`/`max_price`, `furnishing`, `property_type` filters — **TRUE**, all filter correctly; only `project_id` is silently ignored.
+- Exact-coordinate matching as a property-identity proxy — **FALSE**, merges distinct units in the same building.
+- A 4-field exact-match `(lat, long, floor, bedroom)` key as a duplicate-finder — **FALSE**, too strict, zero matches.
+- Diurnal posting-time patterns as a timezone-detection method — **FALSE**, the underlying data is generated with uniformly random times of day.
+- `total_floors <= 0` as a corruption signal — **FALSE**, always and only legitimate `plot` records.
+- Tiny `carpet_area` as a corruption signal — **FALSE** once the magichomes sqm bug is corrected; zero genuine violations remain.
+- Sub-₹30,000 sale price as a `data_quality`/impossibility signal — **FALSE per the assignment's own impossible-vs-implausible standard**; removed from Q4.
+- `bathroom == 0` (non-plot) as a corruption signal — **FALSE**, plausibly legitimate bare-shell/studio listings.
+- Locality-spread and posting-date-spread as fraud signals — **FALSE/inconclusive**; legitimate high-volume agents show similar spread to the fraud-flagged group once fairly compared.
+- `is_verified` rate as a fraud signal — **FALSE**, runs the wrong direction.
+- Any multi-name-per-contact as sufficient evidence of fraud — **PARTIALLY FALSE**; refined to require a company/agency-name signature and a bedroom-controlled pricing anomaly, which cut the group from 12/230 to 7/95.
+
+## Final answer set
+
+Written to `analysis/results/final_answers.json`. Unchanged from Phase E's `validated_answers.json` — Phase F's re-audit found the ten answers sound and did not reopen any of them (per the instruction not to reopen the investigation absent an actual contradiction; none was found).
+
+## Files added/modified in Phase F
+
+- `analysis/results/final_answers.json` — final machine-readable answer set (generated programmatically from `validated_answers.json`, not hand-transcribed, to eliminate transcription risk — an earlier hand-typed draft was caught with a diff check and discarded).
+- `analysis/results/final_findings.json` — final 21-item findings list in submission-ready shape, each field verified against the live documentation text and each evidence ID verified to exist in and genuinely support its claim.

@@ -1,6 +1,7 @@
 {
-  "computed_at": "2026-09-13T19:23:57.053Z",
-  "method": "Phase E independent validation — see INVESTIGATION_LOG.md",
+  "computed_at": "2026-09-14",
+  "phase": "Phase F — final, post-validation",
+  "source": "analysis/scripts/validate.js (Phase E independent re-derivation, unchanged in Phase F)",
   "answers": {
     "total_listing_records": 3500,
     "unique_properties": 3254,
@@ -136,5 +137,12 @@
       "ZER-6003450"
     ],
     "projects_with_wrong_listing_count": 295
+  },
+  "notes": {
+    "unique_properties_methodology": "case/whitespace/hyphen-normalized apartment_name + exact locality/floor/bedroom + carpet_area within 5% + price within 15% + geo within 0.01deg + different source website. See INVESTIGATION_LOG.md Phase E/F.",
+    "corrupt_listing_ids_categories": "negative_or_zero_price, floor_exceeds_total_floors, carpet_area_exceeds_super_built_up, swapped_lat_long. The Phase C/D 'implausible sub-Rs30k price' category was removed in Phase E/F as not meeting the impossibility bar.",
+    "fake_listing_ids_methodology": "posted_by_contact shared across multiple posted_by_name values, where at least one name matches a real-estate agency/company brand pattern, AND price/sqft is ~44-46% below the dataset average controlling for bedroom count. See INVESTIGATION_LOG.md Phase E.",
+    "avg_price_per_sqft_2bhk_methodology": "mean of per-record (price / carpet_area) ratios, not total price / total area. Excludes corrupt_listing_ids and fake_listing_ids. carpet_area uses the magichomes sqm->sqft correction.",
+    "costliest_project_methodology": "price_max converted via the Lakh/Crore rule (raw<10 => *1e7, raw>=10 => *1e5), cross-checked against every project's actual joined listing prices; robust under the most generous alternative resolution of 3 ambiguous outlier projects."
   }
 }
