@@ -24,7 +24,7 @@ export function ProjectFilterBar() {
       <label className="flex max-w-xs flex-col gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
         Locality
         <select
-          defaultValue={searchParams.get("locality") ?? ""}
+          value={searchParams.get("locality") ?? ""}
           onChange={(e) => updateParam(e.target.value)}
           className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
         >

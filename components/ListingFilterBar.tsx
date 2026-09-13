@@ -71,7 +71,7 @@ export function ListingFilterBar() {
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
           Locality
           <select
-            defaultValue={searchParams.get("locality") ?? ""}
+            value={searchParams.get("locality") ?? ""}
             onChange={(e) => updateParam("locality", e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           >
@@ -87,7 +87,7 @@ export function ListingFilterBar() {
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
           Bedrooms
           <select
-            defaultValue={searchParams.get("bedroom") ?? ""}
+            value={searchParams.get("bedroom") ?? ""}
             onChange={(e) => updateParam("bedroom", e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           >
@@ -103,7 +103,7 @@ export function ListingFilterBar() {
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
           Furnishing
           <select
-            defaultValue={searchParams.get("furnishing") ?? ""}
+            value={searchParams.get("furnishing") ?? ""}
             onChange={(e) => updateParam("furnishing", e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           >
@@ -119,7 +119,7 @@ export function ListingFilterBar() {
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
           Property type
           <select
-            defaultValue={searchParams.get("propertyType") ?? ""}
+            value={searchParams.get("propertyType") ?? ""}
             onChange={(e) => updateParam("propertyType", e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           >
