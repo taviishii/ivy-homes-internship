@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Standalone Node/CommonJS investigation scripts (Phase A-F), not part
+    // of the Next.js application — intentionally use require(), not ESM.
+    "analysis/**",
   ]),
 ]);
 
