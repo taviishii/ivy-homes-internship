@@ -20,26 +20,36 @@ export function ListingFilterBar() {
   const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") ?? "");
   const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") ?? "");
 
-  function updateParam(key: string, value: string) {
+  // Builds the next URL from the last-committed search params, an optional
+  // single-key override (for the select dropdowns), and — critically — the
+  // CURRENT minPrice/maxPrice input state every time. Without folding those
+  // in on every navigation, changing a dropdown before a price field has
+  // blurred would push a URL built from the old committed params, silently
+  // dropping whatever price range the user had just typed but not yet
+  // committed (it only reappears once that field itself later blurs).
+  function buildParams(override?: { key: string; value: string }) {
     const params = new URLSearchParams(searchParams.toString());
-    if (value) {
-      params.set(key, value);
-    } else {
-      params.delete(key);
+    if (override) {
+      if (override.value) params.set(override.key, override.value);
+      else params.delete(override.key);
     }
+    if (minPrice) params.set("minPrice", minPrice);
+    else params.delete("minPrice");
+    if (maxPrice) params.set("maxPrice", maxPrice);
+    else params.delete("maxPrice");
     params.delete("offset"); // any filter change restarts pagination
+    return params;
+  }
+
+  function updateParam(key: string, value: string) {
+    const params = buildParams({ key, value });
     startTransition(() => {
       router.push(`${pathname}?${params.toString()}`);
     });
   }
 
   function applyPriceRange() {
-    const params = new URLSearchParams(searchParams.toString());
-    if (minPrice) params.set("minPrice", minPrice);
-    else params.delete("minPrice");
-    if (maxPrice) params.set("maxPrice", maxPrice);
-    else params.delete("maxPrice");
-    params.delete("offset");
+    const params = buildParams();
     startTransition(() => {
       router.push(`${pathname}?${params.toString()}`);
     });
