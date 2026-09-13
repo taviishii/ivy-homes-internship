@@ -157,6 +157,127 @@ Reference: `REFERENCE = 2026-09-10T00:00:00+05:30`. City is identified by
 
 ---
 
-## Requests used this session
+## Requests used in Phase A/B
 
 ~90 requests logged in `analysis/log/requests.jsonl` (gitignored) during Phase A/B — all against documented + a small number of plausible undocumented paths, well under the 1200/min rate limit and the ~150-request full-dataset estimate for Phase C.
+
+---
+
+# Phase C — Full dataset retrieval
+
+Downloaded via `analysis/scripts/download.js` (offset/limit pagination, limit=50, terminating on `has_more:false` rather than on reaching the API's reported `total`). Raw output saved to `analysis/raw/{listings,rentals,projects}.json` (gitignored).
+
+## Hypothesis: the API's reported `total` is accurate
+
+**Motivation:** needed to know when to stop paging, and to sanity-check Q1.
+**Test:** paged every collection endpoint all the way to `has_more:false` and compared the record count actually retrieved against the `total` field reported on every page.
+**Result:** every endpoint's actual retrievable count exceeds its reported `total`: listings 3500 vs reported 3196 (+304, +9.5%), rentals 1320 vs reported 1205 (+115, +9.5%), projects 400 vs reported 365 (+35, +9.6%). Re-ran the full listings pagination independently a second time: identical 3500 unique `listing_id`s both times, zero duplicates, zero IDs unique to either run — ruling out a live-changing dataset / offset-drift race condition as the explanation. The ~9.5% undercount ratio is essentially identical across three unrelated entity types, which is more consistent with a single stale cached counter (e.g. computed before a later data-generation pass added ~9.5% more rows to every table) than with three independent bugs.
+**Conclusion:** CONFIRMED discrepancy (pagination/completeness). `total` cannot be trusted as the record count; "retrievable" per the assignment's own definition ("paging all the way to the end") is the number of records actually returned when paging to `has_more:false`. **This directly sets Q1 = 3500**, not 3196.
+
+---
+
+# Phase D — Hypothesis-driven analysis
+
+## A. Project price units (price_min / price_max)
+
+**Hypothesis:** `price_min`/`price_max` follow the Indian real-estate convention of switching between "Lakh" and "Crore" notation at the ₹1,00,00,000 (1 Crore) threshold, rather than being raw rupees.
+**Motivation:** Phase B found values like `1.66`/`4.54` — implausible as raw rupees, and a single cross-referenced example (P60004) was consistent with mixed units.
+**Test:** Sorted all 400 projects' `price_min` values. Found a hard, exact gap in the raw value distribution: every value falls in either `[1.00, 2.09]` or `[41.50, 99.90]`, with *zero* values in `(2.09, 41.50)`. Converting the low range as Crores (×1e7) and the high range as Lakhs (×1e5) produces one continuous, gapless range of true rupee values from ₹41.5L to ₹2.09Cr — exactly the behavior of the Lakh/Crore display-notation switch at the 1 Crore boundary. Cross-referenced three projects' `price_min`/`price_max` against their real listings' prices (joined client-side by `project_id`, since that filter is broken on `/v1/listings` — see Phase B) and the conversion produced order-of-magnitude-consistent results.
+**Result:** `price_max` shows the same pattern (397/400 values cleanly in the Crore range `[1.00, 5.83]`; 3 outliers in the high-80s/90s that don't cleanly fit either interpretation when cross-checked against their own project's listings — most likely stale/wrong project-aggregate values, consistent with the Q10 finding that project aggregates are frequently wrong, rather than evidence against the general rule).
+**Conclusion:** CONFIRMED discrepancy (units). Rule used everywhere in the analysis: `raw < 10` ⇒ `actual = raw × 1e7` (Crore); `raw >= 10` ⇒ `actual = raw × 1e5` (Lakh). Reproducible in `investigate-price-units.js`. This directly resolves **Q7**: `{"project_id": "P60060", "price_max_inr": 58300000}`, well clear of the second-highest converted value (₹56.6M), so the 3 ambiguous outliers can't change the answer even under the least favorable interpretation.
+
+## B. Listings `posted_at` timezone
+
+**Hypothesis (tested and rejected):** posting times follow a realistic diurnal human-activity pattern that could reveal the timezone by comparison with rentals' known-UTC timestamps.
+**Test:** Computed an hour-of-day histogram for rentals' UTC `posted_at`.
+**Result:** Flat/uniform across all 24 hours (counts 38-77, no diurnal signal). Timestamps are generated uniformly at random with no realistic activity pattern.
+**Conclusion:** FALSE — this approach doesn't work on this dataset; abandoned in favor of a generation-cutoff boundary test.
+
+**Hypothesis:** the dataset's records were generated with a hard cutoff at `REFERENCE = 2026-09-10T00:00:00+05:30`, and this cutoff can reveal which timezone listings' offset-less `posted_at` is expressed in.
+**Motivation:** the assignment anchors everything to REFERENCE; `/health`'s `reference_date` field independently echoes the same timestamp, suggesting it's a meaningful boundary for the dataset, not just an evaluation artifact.
+**Test:** For rentals (confirmed UTC via the `Z` suffix), checked for any `posted_at >= 2026-09-09T18:30:00Z` (REFERENCE converted to UTC) — found none; the latest rental is exactly at that boundary. For listings, checked the day-by-day record count near the boundary and the full time-of-day spread on the last populated calendar day.
+**Result:** Rentals cut off exactly at REFERENCE in UTC terms, confirming a hard generation cutoff exists. Listings' raw "2026-09-09" calendar day contains records spanning the *entire* 24-hour range (00:05 through 23:46) with zero records on "2026-09-10" (aside from 6 isolated far-future outliers, handled separately below). If listings' `posted_at` were UTC, the same REFERENCE cutoff (18:30 UTC) would truncate "2026-09-09" mid-day — records after 18:30 UTC would already be into 2026-09-10 IST and should be absent. They are not absent; the day is fully populated through 23:46.
+**Conclusion:** CONFIRMED (well-evidenced, not merely "appears to be"): **listings' `posted_at` is naive local IST**, not UTC, despite carrying no offset — and despite the documented convention claiming UTC "everywhere in the API" (rentals *do* correctly use UTC+Z, so this is specifically a listings-endpoint discrepancy). Cross-validated against rentals' independently-confirmed UTC cutoff at the same REFERENCE moment. **This directly resolves Q8**: compare the naive IST interval `[2026-09-03T00:00:00, 2026-09-10T00:00:00)` against the raw strings with no conversion. Answer: **129**.
+
+## C. 2027-dated (and other post-REFERENCE) listings
+
+**Motivation:** given B's finding that REFERENCE is a hard generation cutoff, any listing with `posted_at >= REFERENCE` is itself anomalous — it couldn't have been generated by the same process as the other 3494 records.
+**Test:** Found exactly 6 listings with `posted_at >= 2026-09-10T00:00:00` (naive IST), dated 2026-11-14, 2026-11-30, 2026-12-30, 2027-04-21, 2027-05-09, 2027-06-23 — sparse, isolated, one per day, unlike the dense daily volume (10-35/day) of the normal pre-REFERENCE data.
+**Result:** Inspected all 6 individually. One (`MAG-6002328`) has `carpet_area: 109` for a 3-bedroom/3-bathroom apartment — but this is a magichomes record where carpet_area is in square meters (see units finding below); converted, it's a perfectly ordinary listing. Checked the other 5 for internal impossibility (floor vs total_floors, carpet vs super_built_up, price sign, bathroom/bedroom ratio) — none show any impossible combination. Checked `posted_by_contact` for all 6 against the fake-listing multi-name-per-contact signal (section F) — none match.
+**Conclusion:** These 6 records are neither corrupt (no internally impossible field combination once units are corrected) nor fake by the identified fraud signal. They are **timestamp/generation artifacts** — the underlying record is an otherwise ordinary listing, but its `posted_at` value is impossible given the dataset's own generation cutoff. Not included in Q4 or Q9 answers, since neither has direct evidence for those specific classifications; noted here as an open, low-confidence anomaly rather than force-fit into either bucket. Recorded as a documentation/data_quality-adjacent observation, not a submitted finding, since it doesn't cleanly map to one of the fixed finding categories on its own (it's closest to `timestamps`, but the impact is on data trustworthiness rather than a documented-vs-actual API contract) — the units and pagination-total findings already cover the two things this investigation surfaced that *do* map cleanly to categories.
+
+## D. Property identity methodology (Q2)
+
+**Hypothesis (rejected):** exact-match on `(latitude, longitude)` identifies distinct properties.
+**Test:** Grouped by exact lat/long.
+**Result:** 245 groups share an exact coordinate, covering 519 records — but inspecting them shows these are **different units in the same building** (same `apartment_name`, but different `floor`, `bedroom`, `carpet_area`, `price`). Lat/long in this dataset is building-level, not unit-level.
+**Conclusion:** FALSE — naive coordinate matching would wrongly merge distinct units and undercount properties.
+
+**Hypothesis (rejected):** exact match on `(latitude, longitude, floor, bedroom)` identifies distinct properties.
+**Test:** Grouped by this 4-tuple.
+**Result:** Zero duplicate groups — every listing has a unique combination.
+**Conclusion:** FALSE as a duplicate-finder — too strict; genuine cross-portal duplicates apparently don't share bit-for-bit identical GPS coordinates (independent geocoding per source varies slightly).
+
+**Hypothesis (confirmed):** the same physical property, cross-listed by multiple portals, can be identified by requiring an exact match on `(apartment_name, locality, floor, bedroom)` (narrows to "same building, same floor, same bed count") plus close agreement on `carpet_area` (<5% apart), `price` (<15% apart), and raw lat/long (<0.01°, ~1.1km) — with the two records coming from *different* websites (ruling out a same-source re-post rather than a genuine independent duplicate).
+**Motivation:** the structural 4-tuple alone produces 89 candidate groups (180 records) with plausible but not certain duplicates; needed additional numeric agreement to separate "same unit, independently listed" from "different but architecturally identical unit in a large building."
+**Test:** Applied the full threshold set; manually inspected all resulting pairs. One early candidate pair (before adding the geo constraint) matched on all criteria except geography — coordinates ~33km apart — confirming it was a coincidental locality/building-name collision, not a duplicate. Adding the geo constraint removed it. Swept the three numeric thresholds (area/price/geo) across tight/base/loose/very-loose settings; the resulting pair count stayed stable at 51-52 across the entire sweep, indicating a genuine cluster boundary in the data rather than a tuning artifact (`investigate-duplicates.js`).
+**Result:** 52 duplicate pairs found (104 records), all as clean 2-record clusters (no listing matched more than one other — no 3+-way clusters).
+**Conclusion:** CONFIRMED, robust methodology. **Q2 = 3500 − 52 = 3448.**
+
+## E. Corrupt listings (Q4)
+
+Five independent, mutually-exclusive, and individually defensible "physically impossible" signals (reproducible in `lib/corrupt-listings.js`):
+
+1. **`price <= 0`** (6 records) — negative sale prices (e.g. -8,550,000). A property cannot have negative value; all other fields on these records are otherwise unremarkable.
+2. **`floor > total_floors`** (6 records) — e.g. floor 26 of an 11-floor building. Physically impossible.
+3. **`carpet_area > super_built_up_area`** (6 records) — carpet area (usable area within walls) cannot exceed super built-up area (which includes it plus common areas/walls) by definition.
+4. **Swapped latitude/longitude** (6 records) — values fall in ranges consistent with the two fields being transposed (e.g. `latitude: 76.87515, longitude: 28.40613` — the reverse of every other record's `lat≈28.x, long≈76-77.x` pattern for this city), placing the property outside India despite a named Delhi-NCR locality (`sector 82`, `new gurgaon`, etc.). Identified by manual inspection after the automated `lat/long out of India bounds [6-38, 68-98]` check flagged exactly these 6.
+5. **Implausibly low positive price** (6 records, ₹5,030–₹26,260) — no real apartment sells for under ten thousand rupees; multiplying by 1000 in each case produces a price consistent with comparable listings in the same locality/bedroom count, suggesting a missing scale factor, but the record as given describes an economically impossible transaction regardless of the hypothesized cause.
+
+**Hypothesis tested and rejected:** a much larger set of "corrupt" candidates (317 records, `carpet_area/bedroom < 100 sqft`) turned out to be entirely explained by a units bug (see F below), not corruption — after correcting units, zero of these remain anomalous. This is exactly the "distinguish impossible from merely unusual" caution the assignment gives, and the reason unit-correction was done *before* finalizing Q4.
+
+**Hypothesis tested and rejected:** `total_floors <= 0` (103 records) looked suspicious in isolation, but all 103 are `property_type: plot` with `floor: 0, total_floors: 0` — correct and expected for vacant land, which has no floors. Not corrupt.
+
+Cross-checked all 30 final candidates against the Q9 fake-listing signal (contact-frequency, multi-name-per-contact) — zero overlap, and no unusual contact-frequency pattern among them, supporting that these are scattered data-entry/generation errors rather than a coordinated fraud pattern.
+
+**Q4 = 30 listing IDs** (sorted list in `analysis/results/answers.json`).
+
+## F. Units — magichomes area fields
+
+**Hypothesis:** a subset of `magichomes`-sourced listings report `carpet_area`/`super_built_up_area` in square meters, not square feet as documented.
+**Motivation:** a blunt "carpet_area/bedroom < 100 sqft" sweep for Q4 flagged 317 records, and *all 317* had the `MAG-` listing ID prefix (i.e. all from one website) — too clean a correlation with one data source to be scattered corruption.
+**Test:** Printed the full sorted `carpet_area` distribution for magichomes listings within each bedroom count (0 through 5) separately.
+**Result:** Every bedroom count shows a clean **bimodal** split: a tight low cluster (e.g. bedroom=1: 36-52) and a separate high cluster (e.g. bedroom=1: 334-674), with a hard gap between them and no overlap, in every bedroom group. The global low-cluster maximum (221, from bedroom=3) sits well below the global high-cluster minimum (334, from bedroom=1), so a single threshold (`carpet_area < 250`) cleanly separates suspects from normal records regardless of bedroom count. Converting the low cluster by ×10.7639 (sqm→sqft) and recomputing per-bedroom average carpet_area produces numbers matching non-magichomes listings almost exactly (e.g. bedroom=3: converted avg 1212.1 vs non-magichomes avg 1198.0; bedroom=5: 1944.2 vs 1925.4). The `super_built_up_area/carpet_area` ratio is unchanged by the conversion (≈1.34, matching every other source), confirming both area fields need the same correction together.
+**Result:** 323 of 767 magichomes listings (42%) are affected.
+**Conclusion:** CONFIRMED discrepancy (units) — high confidence, reproducible in `investigate-magichomes-units.js`. Applied automatically for all downstream analysis via `lib/load-data.js`. **This materially changes Q6**: computing avg price/sqft for 2BHK without the correction gives ₹27,578.00/sqft (nearly double); with it, ₹14,465.77/sqft — the corrected figure is the one used.
+
+## G. Fake listings (Q9)
+
+**Hypothesis:** a phone number reused across multiple, genuinely different `posted_by_name` values indicates a lead-generation operation posting listings under invented "seller" identities.
+**Motivation:** needed a systematic signal distinct from Q4's data-corruption signals, per the assignment's explicit instruction to distinguish fraud from ordinary bad data.
+**Test:** For every `posted_by_contact`, collected the set of distinct `posted_by_name` values used with it. Checked whether this was plausibly just random name/number pairing noise (i.e. names and numbers independently assigned per record) by checking the overall name pool size (276 distinct names across 3500 listings) — if names were independently assigned per record, a contact reused 13+ times would only keep one consistent name by chance with vanishingly small probability, yet 3 single-name contacts do have exactly 13 listings apiece, and 581/593 contacts (98%) never show more than one name even at volumes up to 13. This establishes that the dataset normally *does* keep name tied consistently to a contact, making violations of that norm meaningful rather than incidental.
+**Result:** 12 contacts (2% of 593) are tied to 3-6 distinct names each. Checked for a volume-based artifact (i.e. maybe only high-volume contacts show this by chance) — found no clean separation by volume (multi-name contacts range 13-35 listings, overlapping the single-name group's own top range of 11-13), so multi-name-ness itself, not volume, is the operative signal. Checked corroborating signals: the 12 hub contacts collectively span 230 listings, cover 6-10 of the city's ~10-15 localities each (vs. a genuine agent who'd typically specialize), always list as `posted_by: agent` (never owner/builder), and price on average 19% below the dataset-wide average price/sqft (₹11,403 vs ₹14,153) — consistent with (if not conclusive proof of) bait pricing to generate enquiries. `is_verified` rate was *higher* among suspects (73% vs 59%), which doesn't fit a naive "fake = unverified" assumption — tested and found this signal uninformative/inconclusive, not corroborating, so it wasn't used as supporting evidence.
+**Conclusion:** CONFIRMED via a systematic, multi-signal pattern (identity-sharing + city-wide locality spread + below-market pricing), reproducible in `lib/fake-listings.js`. Cross-checked for overlap with the Q4 corrupt list — zero overlap, keeping the two categories cleanly separated as the assignment intends.
+**Q9 = 230 listing IDs** (sorted list in `analysis/results/answers.json`).
+
+## H. Project listing counts (Q10)
+
+**Hypothesis:** `project.total_listings` disagrees with an independent join of listings to projects by `project_id`.
+**Motivation:** the assignment explicitly warns not to trust the documented `GET /v1/listings?project_id=...` shortcut, which Phase B already proved is silently ignored.
+**Test:** Counted, for each project, how many downloaded listings actually carry that `project_id`, and compared against the project's own `total_listings` field.
+**Result:** 295 of 400 projects (73.75%) disagree. Checked the direction of the mismatch: 240 undercounts (actual > reported) vs. 55 overcounts (actual < reported) vs. 105 exact matches. The heavy skew toward undercounting is consistent with the same explanation as the pagination-`total` bug (Phase C) — `total_listings` looks like a stale count from before more listings were added to the dataset, not a live-computed aggregate as documented.
+**Conclusion:** CONFIRMED. **Q10 = 295.**
+
+---
+
+# Confirmed documentation discrepancies (Part 3 candidates) — running list after Phase C/D
+
+In addition to the Phase A/B findings already logged above, Phase C/D add:
+
+- **Pagination `total` is inaccurate on every collection endpoint** (`/v1/listings`, `/v1/rentals`, `/v1/projects`): undercounts the actual paginable record count by ~9.5-9.6% consistently, verified by paging every endpoint to `has_more:false` and reproducing an identical result set on a second independent run. Category: `pagination`.
+- **`/v1/projects` `price_min`/`price_max` are not raw rupees**: they follow the Indian Lakh/Crore display-notation convention, proven by a hard, exact gap in the raw value distribution that closes into one continuous rupee range under the standard conversion. Category: `units`.
+- **A subset of `magichomes`-sourced `/v1/listings` records report `carpet_area`/`super_built_up_area` in square meters, not square feet**: 323/767 (42%) of magichomes listings, identified by a clean bimodal per-bedroom distribution and confirmed by the converted values matching every other source's per-bedroom averages almost exactly. Category: `units`.
+- **`/v1/listings` `posted_at` carries no timezone designator and is not UTC** despite the documented "UTC, Z suffix, everywhere" convention (which `/v1/rentals` `posted_at` *does* correctly follow) — it is naive local IST, proven via a generation-cutoff cross-check against rentals' independently-confirmed UTC cutoff at the same REFERENCE moment. Category: `timestamps` (also arguably `consistency`, since the two endpoints disagree on the convention they both claim to follow).
+- **`project.total_listings` disagrees with an independent join to `/v1/listings` by `project_id` for 295/400 projects (73.75%)**, contradicting the documentation's claim that it "always agrees with what `GET /v1/listings?project_id=...` returns" (itself also wrong, since that filter is silently ignored — already logged in Phase B). Category: `consistency`.
+
+See `analysis/results/answers.json` for the full computed answer set with supporting counts.
