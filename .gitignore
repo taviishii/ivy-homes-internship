@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# analysis: raw API dumps are large/derived, never commit them
+/analysis/raw/
+/analysis/log/*.jsonl
