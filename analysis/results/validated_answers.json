@@ -1,5 +1,5 @@
 {
-  "computed_at": "2026-09-13T19:23:57.053Z",
+  "computed_at": "2026-09-14T14:09:28.958Z",
   "method": "Phase E independent validation — see INVESTIGATION_LOG.md",
   "answers": {
     "total_listing_records": 3500,
@@ -31,7 +31,7 @@
       "ZER-6000669",
       "ZER-6001341"
     ],
-    "total_monthly_rent": 5457800,
+    "total_monthly_rent": 4922000,
     "avg_price_per_sqft_2bhk": 14425.01,
     "costliest_project": {
       "project_id": "P60060",
